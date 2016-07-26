@@ -206,8 +206,6 @@ public final class HlsSampleSource implements SampleSource, SampleSourceReader, 
       loadControl.register(this, bufferSizeContribution);
       loadControlRegistered = true;
     }
-    // Treat enabling of a live stream as occurring at t=0 in both of the blocks below.
-    positionUs = chunkSource.isLive() ? 0 : positionUs;
     int chunkSourceTrack = chunkSourceTrackIndices[track];
     if (chunkSourceTrack != -1 && chunkSourceTrack != chunkSource.getSelectedTrackIndex()) {
       // This is a primary track whose corresponding chunk source track is different to the one
@@ -368,8 +366,6 @@ public final class HlsSampleSource implements SampleSource, SampleSourceReader, 
   public void seekToUs(long positionUs) {
     Assertions.checkState(prepared);
     Assertions.checkState(enabledTrackCount > 0);
-    // Treat all seeks into live streams as being to t=0.
-    positionUs = chunkSource.isLive() ? 0 : positionUs;
 
     // Ignore seeks to the current position.
     long currentPositionUs = isPendingReset() ? pendingResetPositionUs : downstreamPositionUs;
@@ -722,6 +718,7 @@ public final class HlsSampleSource implements SampleSource, SampleSourceReader, 
       return;
     }
     if (nextLoadable == null) {
+      loadControl.update(this, downstreamPositionUs, -1, false);
       return;
     }
 

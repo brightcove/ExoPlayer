@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 apply plugin: 'com.android.library'
+apply plugin: 'com.github.dcendents.android-maven'
 apply plugin: 'bintray-release'
+
+configurations {
+    deployerJars
+}
 
 android {
     compileSdkVersion 23
@@ -41,10 +46,22 @@ android {
 }
 
 dependencies {
+    deployerJars "org.kuali.maven.wagons:maven-s3-wagon:1.2.1"
     androidTestCompile 'com.google.dexmaker:dexmaker:1.2'
     androidTestCompile 'com.google.dexmaker:dexmaker-mockito:1.2'
     androidTestCompile 'org.mockito:mockito-core:1.9.5'
 }
+
+uploadArchives {
+    repositories.mavenDeployer {
+        configuration = configurations.deployerJars
+        repository(url: 's3://repo.brightcove.com/releases') {
+        }
+        snapshotRepository(url: 's3://repo.brightcove.com/snapshots') {
+        }
+    }
+}
+uploadArchives.dependsOn 'install'
 
 android.libraryVariants.all { variant ->
     def name = variant.buildType.name

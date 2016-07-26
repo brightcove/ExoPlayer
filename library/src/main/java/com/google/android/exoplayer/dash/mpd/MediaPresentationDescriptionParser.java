@@ -403,15 +403,15 @@ public class MediaPresentationDescriptionParser extends DefaultHandler
       }
     } while (!ParserUtil.isEndTag(xpp, "Representation"));
 
-    Format format = buildFormat(id, mimeType, width, height, frameRate, audioChannels,
+    Format format = buildFormat(id, baseUrl, mimeType, width, height, frameRate, audioChannels,
         audioSamplingRate, bandwidth, language, codecs);
     return buildRepresentation(contentId, -1, format,
         segmentBase != null ? segmentBase : new SingleSegmentBase(baseUrl));
   }
 
-  protected Format buildFormat(String id, String mimeType, int width, int height, float frameRate,
+  protected Format buildFormat(String id, String baseUrl, String mimeType, int width, int height, float frameRate,
       int audioChannels, int audioSamplingRate, int bandwidth, String language, String codecs) {
-    return new Format(id, mimeType, width, height, frameRate, audioChannels, audioSamplingRate,
+    return new Format(id, baseUrl, mimeType, width, height, frameRate, audioChannels, audioSamplingRate,
         bandwidth, language, codecs);
   }
 

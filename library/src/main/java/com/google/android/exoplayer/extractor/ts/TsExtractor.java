@@ -339,7 +339,7 @@ public final class TsExtractor implements Extractor {
           continue;
         }
 
-        ElementaryStreamReader pesPayloadReader;
+        ElementaryStreamReader pesPayloadReader = null;
         switch (streamType) {
           case TS_STREAM_TYPE_MPA:
             pesPayloadReader = new MpegAudioReader(output.track(TS_STREAM_TYPE_MPA));

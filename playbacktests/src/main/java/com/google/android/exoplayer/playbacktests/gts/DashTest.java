@@ -632,4 +632,3 @@ public final class DashTest extends ActivityInstrumentationTestCase2<HostActivit
   }
 
 }
-
