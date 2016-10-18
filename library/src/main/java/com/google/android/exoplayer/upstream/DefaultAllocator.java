@@ -17,7 +17,6 @@ package com.google.android.exoplayer.upstream;
 
 import com.google.android.exoplayer.util.Assertions;
 import com.google.android.exoplayer.util.Util;
-
 import java.util.Arrays;
 
 /**
@@ -96,6 +95,25 @@ public final class DefaultAllocator implements Allocator {
   }
 
   @Override
+  public synchronized void release(Allocation[] allocations) {
+    if (availableCount + allocations.length >= availableAllocations.length) {
+      availableAllocations = Arrays.copyOf(
+          availableAllocations, Math.max(
+              availableAllocations.length * 2,
+              availableCount + allocations.length));
+    }
+    for (Allocation allocation : allocations) {
+      // Weak sanity check that the allocation probably originated from this pool.
+      Assertions.checkArgument(allocation.data == initialAllocationBlock
+          || allocation.data.length == individualAllocationSize);
+      availableAllocations[availableCount++] = allocation;
+    }
+    allocatedCount -= allocations.length;
+    // Wake up threads waiting for the allocated size to drop.
+    notifyAll();
+  }
+
+  @Override
   public synchronized void trim(int targetSize) {
     int targetAllocationCount = Util.ceilDivide(targetSize, individualAllocationSize);
     int targetAvailableCount = Math.max(0, targetAllocationCount - allocatedCount);
@@ -115,7 +133,7 @@ public final class DefaultAllocator implements Allocator {
         if (lowAllocation.data == initialAllocationBlock) {
           lowIndex++;
         } else {
-          Allocation highAllocation = availableAllocations[lowIndex];
+          Allocation highAllocation = availableAllocations[highIndex];
           if (highAllocation.data != initialAllocationBlock) {
             highIndex--;
           } else {

@@ -15,17 +15,12 @@
  */
 package com.google.android.exoplayer.chunk;
 
+import android.content.Context;
+import android.graphics.Point;
 import com.google.android.exoplayer.MediaCodecUtil;
 import com.google.android.exoplayer.MediaCodecUtil.DecoderQueryException;
 import com.google.android.exoplayer.util.MimeTypes;
 import com.google.android.exoplayer.util.Util;
-
-import android.annotation.TargetApi;
-import android.content.Context;
-import android.graphics.Point;
-import android.view.Display;
-import android.view.WindowManager;
-
 import java.util.ArrayList;
 import java.util.List;
 
@@ -56,9 +51,9 @@ public final class VideoFormatSelectorUtil {
   public static int[] selectVideoFormatsForDefaultDisplay(Context context,
       List<? extends FormatWrapper> formatWrappers, String[] allowedContainerMimeTypes,
       boolean filterHdFormats) throws DecoderQueryException {
-    Point viewportSize = getViewportSize(context);
+    Point viewportSize = Util.getPhysicalDisplaySize(context); // Assume the viewport is fullscreen.
     return selectVideoFormats(formatWrappers, allowedContainerMimeTypes, filterHdFormats, true,
-        viewportSize.x, viewportSize.y);
+        false, viewportSize.x, viewportSize.y);
   }
 
   /**
@@ -80,6 +75,7 @@ public final class VideoFormatSelectorUtil {
    * @param filterHdFormats True to filter HD formats. False otherwise.
    * @param orientationMayChange True if the video's orientation may change with respect to the
    *     viewport during playback.
+   * @param secureDecoder True if secure decoder is required.
    * @param viewportWidth The width in pixels of the viewport within which the video will be
    *     displayed. If the viewport size may change, this should be set to the maximum possible
    *     width. -1 if selection should not be constrained by a viewport.
@@ -91,7 +87,7 @@ public final class VideoFormatSelectorUtil {
    */
   public static int[] selectVideoFormats(List<? extends FormatWrapper> formatWrappers,
       String[] allowedContainerMimeTypes, boolean filterHdFormats, boolean orientationMayChange,
-      int viewportWidth, int viewportHeight) throws DecoderQueryException {
+      boolean secureDecoder, int viewportWidth, int viewportHeight) throws DecoderQueryException {
     int maxVideoPixelsToRetain = Integer.MAX_VALUE;
     ArrayList<Integer> selectedIndexList = new ArrayList<>();
 
@@ -99,7 +95,7 @@ public final class VideoFormatSelectorUtil {
     int formatWrapperCount = formatWrappers.size();
     for (int i = 0; i < formatWrapperCount; i++) {
       Format format = formatWrappers.get(i).getFormat();
-      if (isFormatPlayable(format, allowedContainerMimeTypes, filterHdFormats)) {
+      if (isFormatPlayable(format, allowedContainerMimeTypes, filterHdFormats, secureDecoder)) {
         // Select the format for now. It may still be filtered in the second pass below.
         selectedIndexList.add(i);
         // Keep track of the number of pixels of the selected format whose resolution is the
@@ -139,7 +135,7 @@ public final class VideoFormatSelectorUtil {
    * whether HD formats should be filtered and a maximum decodable frame size in pixels.
    */
   private static boolean isFormatPlayable(Format format, String[] allowedContainerMimeTypes,
-      boolean filterHdFormats) throws DecoderQueryException {
+      boolean filterHdFormats, boolean secureDecoder) throws DecoderQueryException {
     if (allowedContainerMimeTypes != null
         && !Util.contains(allowedContainerMimeTypes, format.mimeType)) {
       // Filtering format based on its container mime type.
@@ -157,10 +153,10 @@ public final class VideoFormatSelectorUtil {
           videoMediaMimeType = MimeTypes.VIDEO_H264;
         }
         if (format.frameRate > 0) {
-          return MediaCodecUtil.isSizeAndRateSupportedV21(videoMediaMimeType, false, format.width,
-              format.height, format.frameRate);
+          return MediaCodecUtil.isSizeAndRateSupportedV21(videoMediaMimeType, secureDecoder,
+              format.width, format.height, format.frameRate);
         } else {
-          return MediaCodecUtil.isSizeSupportedV21(videoMediaMimeType, false, format.width,
+          return MediaCodecUtil.isSizeSupportedV21(videoMediaMimeType, secureDecoder, format.width,
               format.height);
         }
       }
@@ -193,56 +189,6 @@ public final class VideoFormatSelectorUtil {
       // Vertical letter-boxing along edges.
       return new Point(Util.ceilDivide(viewportHeight * videoWidth, videoHeight), viewportHeight);
     }
-  }
-
-  private static Point getViewportSize(Context context) {
-    // Before API 23 the platform Display object does not provide a way to identify Android TVs that
-    // can show 4k resolution in a SurfaceView, so check for supported devices here.
-    // See also https://developer.sony.com/develop/tvs/android-tv/design-guide/.
-    if (Util.SDK_INT < 23 && Util.MODEL != null && Util.MODEL.startsWith("BRAVIA")
-        && context.getPackageManager().hasSystemFeature("com.sony.dtv.hardware.panel.qfhd")) {
-      return new Point(3840, 2160);
-    }
-
-    WindowManager windowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
-    return getDisplaySize(windowManager.getDefaultDisplay());
-  }
-
-  private static Point getDisplaySize(Display display) {
-    Point displaySize = new Point();
-    if (Util.SDK_INT >= 23) {
-      getDisplaySizeV23(display, displaySize);
-    } else if (Util.SDK_INT >= 17) {
-      getDisplaySizeV17(display, displaySize);
-    } else if (Util.SDK_INT >= 16) {
-      getDisplaySizeV16(display, displaySize);
-    } else {
-      getDisplaySizeV9(display, displaySize);
-    }
-    return displaySize;
-  }
-
-  @TargetApi(23)
-  private static void getDisplaySizeV23(Display display, Point outSize) {
-    Display.Mode mode = display.getMode();
-    outSize.x = mode.getPhysicalWidth();
-    outSize.y = mode.getPhysicalHeight();
-  }
-
-  @TargetApi(17)
-  private static void getDisplaySizeV17(Display display, Point outSize) {
-    display.getRealSize(outSize);
-  }
-
-  @TargetApi(16)
-  private static void getDisplaySizeV16(Display display, Point outSize) {
-    display.getSize(outSize);
-  }
-
-  @SuppressWarnings("deprecation")
-  private static void getDisplaySizeV9(Display display, Point outSize) {
-    outSize.x = display.getWidth();
-    outSize.y = display.getHeight();
   }
 
   private VideoFormatSelectorUtil() {}

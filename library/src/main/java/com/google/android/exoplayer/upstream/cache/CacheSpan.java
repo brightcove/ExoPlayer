@@ -16,7 +16,6 @@
 package com.google.android.exoplayer.upstream.cache;
 
 import com.google.android.exoplayer.util.Util;
-
 import java.io.File;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -28,9 +27,9 @@ public final class CacheSpan implements Comparable<CacheSpan> {
 
   private static final String SUFFIX = ".v2.exo";
   private static final Pattern CACHE_FILE_PATTERN_V1 =
-      Pattern.compile("^(.+)\\.(\\d+)\\.(\\d+)\\.v1\\.exo$");
+      Pattern.compile("^(.+)\\.(\\d+)\\.(\\d+)\\.v1\\.exo$", Pattern.DOTALL);
   private static final Pattern CACHE_FILE_PATTERN_V2 =
-      Pattern.compile("^(.+)\\.(\\d+)\\.(\\d+)\\.v2\\.exo$");
+      Pattern.compile("^(.+)\\.(\\d+)(E?)\\.(\\d+)\\.v2\\.exo$", Pattern.DOTALL);
 
   /**
    * The cache key that uniquely identifies the original stream.
@@ -88,7 +87,7 @@ public final class CacheSpan implements Comparable<CacheSpan> {
     }
     String key = Util.unescapeFileName(matcher.group(1));
     return key == null ? null : createCacheEntry(
-        key, Long.parseLong(matcher.group(2)), Long.parseLong(matcher.group(3)), file);
+        key, Long.parseLong(matcher.group(2)), Long.parseLong(matcher.group(4)), file);
   }
 
   static File upgradeIfNeeded(File file) {

@@ -26,13 +26,12 @@ import com.google.android.exoplayer.upstream.DataSource;
 import com.google.android.exoplayer.upstream.DataSpec;
 import com.google.android.exoplayer.util.ParsableByteArray;
 import com.google.android.exoplayer.util.Util;
-
 import java.io.IOException;
 
 /**
  * A {@link Chunk} that uses an {@link Extractor} to parse initialization data for single track.
  */
-public final class InitializationChunk extends Chunk implements SingleTrackOutput {
+public class InitializationChunk extends Chunk implements SingleTrackOutput {
 
   private final ChunkExtractorWrapper extractorWrapper;
 
