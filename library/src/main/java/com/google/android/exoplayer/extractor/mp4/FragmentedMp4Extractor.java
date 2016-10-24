@@ -15,6 +15,9 @@
  */
 package com.google.android.exoplayer.extractor.mp4;
 
+import android.util.Log;
+import android.util.Pair;
+import android.util.SparseArray;
 import com.google.android.exoplayer.C;
 import com.google.android.exoplayer.ParserException;
 import com.google.android.exoplayer.drm.DrmInitData;
@@ -33,11 +36,6 @@ import com.google.android.exoplayer.util.MimeTypes;
 import com.google.android.exoplayer.util.NalUnitUtil;
 import com.google.android.exoplayer.util.ParsableByteArray;
 import com.google.android.exoplayer.util.Util;
-
-import android.util.Log;
-import android.util.Pair;
-import android.util.SparseArray;
-
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
@@ -320,26 +318,8 @@ public class FragmentedMp4Extractor implements Extractor {
 
   private void onMoovContainerAtomRead(ContainerAtom moov) {
     Assertions.checkState(sideloadedTrack == null, "Unexpected moov box.");
-    List<Atom.LeafAtom> moovLeafChildren = moov.leafChildren;
-    int moovLeafChildrenSize = moovLeafChildren.size();
 
-    DrmInitData.Mapped drmInitData = null;
-    for (int i = 0; i < moovLeafChildrenSize; i++) {
-      LeafAtom child = moovLeafChildren.get(i);
-      if (child.type == Atom.TYPE_pssh) {
-        if (drmInitData == null) {
-          drmInitData = new DrmInitData.Mapped();
-        }
-        byte[] psshData = child.data.data;
-        UUID uuid = PsshAtomUtil.parseUuid(psshData);
-        if (uuid == null) {
-          Log.w(TAG, "Skipped pssh atom (failed to extract uuid)");
-        } else {
-          drmInitData.put(PsshAtomUtil.parseUuid(psshData),
-              new SchemeInitData(MimeTypes.VIDEO_MP4, psshData));
-        }
-      }
-    }
+    DrmInitData.Mapped drmInitData = getDrmInitDataFromAtoms(moov.leafChildren);
     if (drmInitData != null) {
       extractorOutput.drmInitData(drmInitData);
     }
@@ -393,6 +373,10 @@ public class FragmentedMp4Extractor implements Extractor {
 
   private void onMoofContainerAtomRead(ContainerAtom moof) throws ParserException {
     parseMoof(moof, trackBundles, flags, extendedTypeScratch);
+    DrmInitData.Mapped drmInitData = getDrmInitDataFromAtoms(moof.leafChildren);
+    if (drmInitData != null) {
+      extractorOutput.drmInitData(drmInitData);
+    }
   }
 
   /**
@@ -1029,6 +1013,29 @@ public class FragmentedMp4Extractor implements Extractor {
     int subsampleDataLength = 2 + 6 * subsampleCount;
     output.sampleData(sampleEncryptionData, subsampleDataLength);
     return 1 + vectorSize + subsampleDataLength;
+  }
+
+  /** Returns DrmInitData from leaf atoms. */
+  private static DrmInitData.Mapped getDrmInitDataFromAtoms(List<Atom.LeafAtom> leafChildren) {
+    DrmInitData.Mapped drmInitData = null;
+    int leafChildrenSize = leafChildren.size();
+    for (int i = 0; i < leafChildrenSize; i++) {
+      LeafAtom child = leafChildren.get(i);
+      if (child.type == Atom.TYPE_pssh) {
+        if (drmInitData == null) {
+          drmInitData = new DrmInitData.Mapped();
+        }
+        byte[] psshData = child.data.data;
+        UUID uuid = PsshAtomUtil.parseUuid(psshData);
+        if (uuid == null) {
+          Log.w(TAG, "Skipped pssh atom (failed to extract uuid)");
+        } else {
+          drmInitData.put(PsshAtomUtil.parseUuid(psshData),
+              new SchemeInitData(MimeTypes.VIDEO_MP4, psshData));
+        }
+      }
+    }
+    return drmInitData;
   }
 
   /** Returns whether the extractor should parse a leaf atom with type {@code atom}. */

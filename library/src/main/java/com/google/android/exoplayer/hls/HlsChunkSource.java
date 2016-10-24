@@ -15,6 +15,11 @@
  */
 package com.google.android.exoplayer.hls;
 
+import android.net.Uri;
+import android.os.Handler;
+import android.os.SystemClock;
+import android.text.TextUtils;
+import android.util.Log;
 import com.google.android.exoplayer.BehindLiveWindowException;
 import com.google.android.exoplayer.C;
 import com.google.android.exoplayer.MediaFormat;
@@ -37,13 +42,6 @@ import com.google.android.exoplayer.util.Assertions;
 import com.google.android.exoplayer.util.MimeTypes;
 import com.google.android.exoplayer.util.UriUtil;
 import com.google.android.exoplayer.util.Util;
-
-import android.net.Uri;
-import android.os.Handler;
-import android.os.SystemClock;
-import android.text.TextUtils;
-import android.util.Log;
-
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.math.BigInteger;
@@ -62,7 +60,8 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
   /**
    * Interface definition for a callback to be notified of {@link HlsChunkSource} events.
    */
-  public interface EventListener extends BaseChunkSampleSourceEventListener {
+  public interface EventListener {
+
     /**
      * Invoked when a media playlist has been loaded.
      *
@@ -76,42 +75,8 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
      * @param sourceId The id of the reporting {@link com.google.android.exoplayer.dash.DashChunkSource}.
      * @param availableRange The range which specifies available content that can be seeked to.
      */
-    public void onAvailableRangeChanged(int sourceId, TimeRange availableRange);
+    public void onAvailableRangeChanged(TimeRange availableRange);
   }
-
-  /**
-   * Adaptive switching is disabled.
-   * <p>
-   * The initially selected variant will be used throughout playback.
-   */
-  public static final int ADAPTIVE_MODE_NONE = 0;
-
-  /**
-   * Adaptive switches splice overlapping segments of the old and new variants.
-   * <p>
-   * When performing a switch from one variant to another, overlapping segments will be requested
-   * from both the old and new variants. These segments will then be spliced together, allowing
-   * a seamless switch from one variant to another even if keyframes are misaligned or if keyframes
-   * are not positioned at the start of each segment.
-   * <p>
-   * Note that where it can be guaranteed that the source content has keyframes positioned at the
-   * start of each segment, {@link #ADAPTIVE_MODE_ABRUPT} should always be used in preference to
-   * this mode.
-   */
-  public static final int ADAPTIVE_MODE_SPLICE = 1;
-
-  /**
-   * Adaptive switches are performed at segment boundaries.
-   * <p>
-   * For this mode to perform seamless switches, the source content is required to have keyframes
-   * positioned at the start of each segment. If this is not the case a visual discontinuity may
-   * be experienced when switching from one variant to another.
-   * <p>
-   * Note that where it can be guaranteed that the source content does have keyframes positioned at
-   * the start of each segment, this mode should always be used in preference to
-   * {@link #ADAPTIVE_MODE_SPLICE} because it requires fetching less data.
-   */
-  public static final int ADAPTIVE_MODE_ABRUPT = 3;
 
   /**
    * The default minimum duration of media that needs to be buffered for a switch to a higher
@@ -130,6 +95,12 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
    */
   public static final long DEFAULT_PLAYLIST_BLACKLIST_MS = 60000;
 
+  /**
+   * Subtracted value to lookup position when switching between variants in live streams to avoid
+   * gaps in playback in case playlist drift apart.
+   */
+  private static final double LIVE_VARIANT_SWITCH_SAFETY_EXTRA_SECS = 2.0;
+
   private static final String TAG = "HlsChunkSource";
   private static final String AAC_FILE_EXTENSION = ".aac";
   private static final String MP3_FILE_EXTENSION = ".mp3";
@@ -144,7 +115,6 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
   private final HlsTrackSelector trackSelector;
   private final BandwidthMeter bandwidthMeter;
   private final PtsTimestampAdjusterProvider timestampAdjusterProvider;
-  private final int adaptiveMode;
   private final String baseUri;
   private final long minBufferDurationToSwitchUpUs;
   private final long maxBufferDurationToSwitchDownUs;
@@ -173,7 +143,6 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
   private boolean prepareCalled;
   private byte[] scratchSpace;
   private boolean live;
-  private final int eventSourceId;
   private long durationUs;
   private IOException fatalError;
 
@@ -190,23 +159,19 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
    *     playback must have exactly one master source, which should be the source providing video
    *     chunks (or audio chunks for audio only playbacks).
    * @param dataSource A {@link DataSource} suitable for loading the media data.
-   * @param playlistUrl The playlist URL.
-   * @param playlist The hls playlist.
+   * @param playlist The HLS playlist.
    * @param trackSelector Selects tracks to be exposed by this source.
    * @param bandwidthMeter Provides an estimate of the currently available bandwidth.
    * @param timestampAdjusterProvider A provider of {@link PtsTimestampAdjuster} instances. If
    *     multiple {@link HlsChunkSource}s are used for a single playback, they should all share the
    *     same provider.
-   * @param adaptiveMode The mode for switching from one variant to another. One of
-   *     {@link #ADAPTIVE_MODE_NONE}, {@link #ADAPTIVE_MODE_ABRUPT} and
-   *     {@link #ADAPTIVE_MODE_SPLICE}.
    */
-  public HlsChunkSource(boolean isMaster, DataSource dataSource, String playlistUrl,
-      HlsPlaylist playlist, HlsTrackSelector trackSelector, BandwidthMeter bandwidthMeter,
-      PtsTimestampAdjusterProvider timestampAdjusterProvider, int adaptiveMode) {
-    this(isMaster, dataSource, playlistUrl, playlist, trackSelector, bandwidthMeter,
-        timestampAdjusterProvider, adaptiveMode, DEFAULT_MIN_BUFFER_TO_SWITCH_UP_MS,
-        DEFAULT_MAX_BUFFER_TO_SWITCH_DOWN_MS, null, null, 0);
+  public HlsChunkSource(boolean isMaster, DataSource dataSource, HlsPlaylist playlist,
+      HlsTrackSelector trackSelector, BandwidthMeter bandwidthMeter,
+      PtsTimestampAdjusterProvider timestampAdjusterProvider) {
+    this(isMaster, dataSource, playlist, trackSelector, bandwidthMeter,
+        timestampAdjusterProvider, DEFAULT_MIN_BUFFER_TO_SWITCH_UP_MS,
+        DEFAULT_MAX_BUFFER_TO_SWITCH_DOWN_MS, null, null);
   }
 
   /**
@@ -214,53 +179,108 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
    *     playback must have exactly one master source, which should be the source providing video
    *     chunks (or audio chunks for audio only playbacks).
    * @param dataSource A {@link DataSource} suitable for loading the media data.
-   * @param playlistUrl The playlist URL.
-   * @param playlist The hls playlist.
+   * @param playlist The HLS playlist.
    * @param trackSelector Selects tracks to be exposed by this source.
    * @param bandwidthMeter Provides an estimate of the currently available bandwidth.
    * @param timestampAdjusterProvider A provider of {@link PtsTimestampAdjuster} instances. If
    *     multiple {@link HlsChunkSource}s are used for a single playback, they should all share the
    *     same provider.
-   * @param adaptiveMode The mode for switching from one variant to another. One of
-   *     {@link #ADAPTIVE_MODE_NONE}, {@link #ADAPTIVE_MODE_ABRUPT} and
-   *     {@link #ADAPTIVE_MODE_SPLICE}.
    * @param minBufferDurationToSwitchUpMs The minimum duration of media that needs to be buffered
    *     for a switch to a higher quality variant to be considered.
    * @param maxBufferDurationToSwitchDownMs The maximum duration of media that needs to be buffered
    *     for a switch to a lower quality variant to be considered.
-   * @param eventHandler A handler to use when delivering events to {@code EventListener}. May be
+   */
+  public HlsChunkSource(boolean isMaster, DataSource dataSource, HlsPlaylist playlist,
+      HlsTrackSelector trackSelector, BandwidthMeter bandwidthMeter,
+      PtsTimestampAdjusterProvider timestampAdjusterProvider, long minBufferDurationToSwitchUpMs,
+      long maxBufferDurationToSwitchDownMs) {
+    this(isMaster, dataSource, playlist, trackSelector, bandwidthMeter,
+         timestampAdjusterProvider, minBufferDurationToSwitchUpMs,
+         maxBufferDurationToSwitchDownMs, null, null);
+  }
+
+      /**
+   * @param isMaster True if this is the master source for the playback. False otherwise. Each
+   *     playback must have exactly one master source, which should be the source providing video
+   *     chunks (or audio chunks for audio only playbacks).
+   * @param dataSource A {@link DataSource} suitable for loading the media data.
+   * @param playlist The HLS playlist.
+   * @param trackSelector Selects tracks to be exposed by this source.
+   * @param bandwidthMeter Provides an estimate of the currently available bandwidth.
+   * @param timestampAdjusterProvider A provider of {@link PtsTimestampAdjuster} instances. If
+   *     multiple {@link HlsChunkSource}s are used for a single playback, they should all share the
+   *     same provider.
+   * @param minBufferDurationToSwitchUpMs The minimum duration of media that needs to be buffered
+   *     for a switch to a higher quality variant to be considered.
+   * @param maxBufferDurationToSwitchDownMs The maximum duration of media that needs to be buffered
+   *     for a switch to a lower quality variant to be considered.
+   * @param eventHandler A handler to use when delivering events to {@code eventListener}. May be
    *     null if delivery of events is not required.
    * @param eventListener A listener of events. May be null if delivery of events is not required.
-   * @param eventSourceId An identifier that gets passed to {@code eventListener} methods.
    */
-  public HlsChunkSource(boolean isMaster, DataSource dataSource, String playlistUrl,
-      HlsPlaylist playlist, HlsTrackSelector trackSelector, BandwidthMeter bandwidthMeter,
-      PtsTimestampAdjusterProvider timestampAdjusterProvider, int adaptiveMode,
+  public HlsChunkSource(boolean isMaster, DataSource dataSource, HlsPlaylist playlist,
+      HlsTrackSelector trackSelector, BandwidthMeter bandwidthMeter,
+      PtsTimestampAdjusterProvider timestampAdjusterProvider,
       long minBufferDurationToSwitchUpMs, long maxBufferDurationToSwitchDownMs,
-      Handler eventHandler, EventListener eventListener, int eventSourceId) {
+                        Handler eventHandler, EventListener eventListener) {
+      this(isMaster, dataSource, null, playlist, trackSelector, bandwidthMeter,
+         timestampAdjusterProvider, minBufferDurationToSwitchUpMs,
+         maxBufferDurationToSwitchDownMs, eventHandler, eventListener);
+
+  }
+  /**
+   * @param isMaster True if this is the master source for the playback. False otherwise. Each
+   *     playback must have exactly one master source, which should be the source providing video
+   *     chunks (or audio chunks for audio only playbacks).
+   * @param dataSource A {@link DataSource} suitable for loading the media data.
+   * @param playlistUrl The playlist URL.
+   * @param playlist The HLS playlist.
+   * @param trackSelector Selects tracks to be exposed by this source.
+   * @param bandwidthMeter Provides an estimate of the currently available bandwidth.
+   * @param timestampAdjusterProvider A provider of {@link PtsTimestampAdjuster} instances. If
+   *     multiple {@link HlsChunkSource}s are used for a single playback, they should all share the
+   *     same provider.
+   * @param minBufferDurationToSwitchUpMs The minimum duration of media that needs to be buffered
+   *     for a switch to a higher quality variant to be considered.
+   * @param maxBufferDurationToSwitchDownMs The maximum duration of media that needs to be buffered
+   *     for a switch to a lower quality variant to be considered.
+   * @param eventHandler A handler to use when delivering events to {@code eventListener}. May be
+   *     null if delivery of events is not required.
+   * @param eventListener A listener of events. May be null if delivery of events is not required.
+   */
+    public HlsChunkSource(boolean isMaster, DataSource dataSource, String playlistUrl,  HlsPlaylist playlist,
+      HlsTrackSelector trackSelector, BandwidthMeter bandwidthMeter,
+      PtsTimestampAdjusterProvider timestampAdjusterProvider,
+      long minBufferDurationToSwitchUpMs, long maxBufferDurationToSwitchDownMs,
+      Handler eventHandler, EventListener eventListener) {
     this.isMaster = isMaster;
     this.dataSource = dataSource;
     this.trackSelector = trackSelector;
     this.bandwidthMeter = bandwidthMeter;
     this.timestampAdjusterProvider = timestampAdjusterProvider;
-    this.adaptiveMode = adaptiveMode;
-    this.eventHandler = eventHandler;
     this.eventListener = eventListener;
-    this.eventSourceId = eventSourceId;
+    this.eventHandler = eventHandler;
     minBufferDurationToSwitchUpUs = minBufferDurationToSwitchUpMs * 1000;
     maxBufferDurationToSwitchDownUs = maxBufferDurationToSwitchDownMs * 1000;
-    baseUri = playlist.baseUri;
+    this.baseUri = playlist.baseUri;
+
     playlistParser = new HlsPlaylistParser();
     tracks = new ArrayList<>();
 
     if (playlist.type == HlsPlaylist.TYPE_MASTER) {
       masterPlaylist = (HlsMasterPlaylist) playlist;
     } else {
-      Format format = new Format("0", playlistUrl, MimeTypes.APPLICATION_M3U8, -1, -1, -1, -1, -1, -1, null,
+      String baseUri;
+      if (playlistUrl != null && !playlistUrl.isEmpty()) {
+        baseUri = playlistUrl;
+      } else {
+        baseUri = this.baseUri;
+      }
+      Format format = new Format("0", baseUri, MimeTypes.APPLICATION_M3U8, -1, -1, -1, -1, -1, -1, null,
           null);
       List<Variant> variants = new ArrayList<>();
-      variants.add(new Variant(playlistUrl, format));
-      masterPlaylist = new HlsMasterPlaylist(playlistUrl, variants, Collections.<Variant>emptyList(),
+      variants.add(new Variant(baseUri, format));
+      masterPlaylist = new HlsMasterPlaylist(baseUri, variants, Collections.<Variant>emptyList(),
           Collections.<Variant>emptyList(), Collections.<Variant>emptyList(), Collections.<Variant>emptyList(),
           null, null);
     }
@@ -423,17 +443,11 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
    */
   public void getChunkOperation(TsChunk previousTsChunk, long playbackPositionUs,
       ChunkOperationHolder out) {
-    int nextVariantIndex;
-    boolean switchingVariantSpliced;
-    if (adaptiveMode == ADAPTIVE_MODE_NONE) {
-      nextVariantIndex = selectedVariantIndex;
-      switchingVariantSpliced = false;
-    } else {
-      nextVariantIndex = getNextVariantIndex(previousTsChunk, playbackPositionUs);
-      switchingVariantSpliced = previousTsChunk != null
-          && !variants[nextVariantIndex].format.equals(previousTsChunk.format)
-          && adaptiveMode == ADAPTIVE_MODE_SPLICE;
-    }
+    int previousChunkVariantIndex =
+        previousTsChunk == null ? -1 : getVariantIndex(previousTsChunk.format);
+    int nextVariantIndex = getNextVariantIndex(previousTsChunk, playbackPositionUs);
+    boolean switchingVariant = previousTsChunk != null
+        && previousChunkVariantIndex != nextVariantIndex;
 
     HlsMediaPlaylist mediaPlaylist = variantPlaylists[nextVariantIndex];
     if (mediaPlaylist == null) {
@@ -443,18 +457,18 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
     }
 
     selectedVariantIndex = nextVariantIndex;
-    int chunkMediaSequence = 0;
+    int chunkMediaSequence;
     if (live) {
       if (previousTsChunk == null) {
         if (playbackPositionUs == 0 || playbackPositionUs > getLiveEdgeUs(nextVariantIndex)) {
-          chunkMediaSequence = getLiveStartChunkMediaSequence(nextVariantIndex);
+        chunkMediaSequence = getLiveStartChunkSequenceNumber(selectedVariantIndex);
         } else {
           chunkMediaSequence = Util.binarySearchFloor(mediaPlaylist.segments, playbackPositionUs, true,
             true) + mediaPlaylist.mediaSequence;
         }
       } else {
-        chunkMediaSequence = switchingVariantSpliced
-            ? previousTsChunk.chunkIndex : previousTsChunk.chunkIndex + 1;
+        chunkMediaSequence = getLiveNextChunkSequenceNumber(previousTsChunk.chunkIndex,
+            previousChunkVariantIndex, selectedVariantIndex);
         if (chunkMediaSequence < mediaPlaylist.mediaSequence) {
           fatalError = new BehindLiveWindowException();
           return;
@@ -465,9 +479,11 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
       if (previousTsChunk == null) {
         chunkMediaSequence = Util.binarySearchFloor(mediaPlaylist.segments, playbackPositionUs,
             true, true) + mediaPlaylist.mediaSequence;
+      } else if (switchingVariant) {
+        chunkMediaSequence = Util.binarySearchFloor(mediaPlaylist.segments,
+            previousTsChunk.startTimeUs, true, true) + mediaPlaylist.mediaSequence;
       } else {
-        chunkMediaSequence = switchingVariantSpliced
-            ? previousTsChunk.chunkIndex : previousTsChunk.chunkIndex + 1;
+        chunkMediaSequence = previousTsChunk.getNextChunkIndex();
       }
     }
 
@@ -475,8 +491,8 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
     if (chunkIndex >= mediaPlaylist.segments.size()) {
       if (!mediaPlaylist.live) {
         out.endOfStream = true;
-      } else if (shouldRerequestLiveMediaPlaylist(nextVariantIndex)) {
-        out.chunk = newMediaPlaylistChunk(nextVariantIndex);
+      } else if (shouldRerequestLiveMediaPlaylist(selectedVariantIndex)) {
+        out.chunk = newMediaPlaylistChunk(selectedVariantIndex);
       }
       return;
     }
@@ -508,10 +524,9 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
     if (live) {
       if (previousTsChunk == null) {
         startTimeUs = segment.startTimeUs;
-      } else if (switchingVariantSpliced) {
-        startTimeUs = previousTsChunk.startTimeUs;
       } else {
-        startTimeUs = previousTsChunk.endTimeUs;
+        startTimeUs = previousTsChunk.getAdjustedEndTimeUs()
+            - (switchingVariant ? previousTsChunk.getDurationUs() : 0);
       }
     } else /* Not live */ {
       startTimeUs = segment.startTimeUs;
@@ -529,11 +544,11 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
       // case below.
       Extractor extractor = new AdtsExtractor(startTimeUs);
       extractorWrapper = new HlsExtractorWrapper(trigger, format, startTimeUs, extractor,
-          switchingVariantSpliced, MediaFormat.NO_VALUE, MediaFormat.NO_VALUE);
+          switchingVariant, MediaFormat.NO_VALUE, MediaFormat.NO_VALUE);
     } else if (lastPathSegment.endsWith(MP3_FILE_EXTENSION)) {
       Extractor extractor = new Mp3Extractor(startTimeUs);
       extractorWrapper = new HlsExtractorWrapper(trigger, format, startTimeUs, extractor,
-          switchingVariantSpliced, MediaFormat.NO_VALUE, MediaFormat.NO_VALUE);
+          switchingVariant, MediaFormat.NO_VALUE, MediaFormat.NO_VALUE);
     } else if (lastPathSegment.endsWith(WEBVTT_FILE_EXTENSION)
         || lastPathSegment.endsWith(VTT_FILE_EXTENSION)) {
       PtsTimestampAdjuster timestampAdjuster = timestampAdjusterProvider.getAdjuster(isMaster,
@@ -546,7 +561,7 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
       }
       Extractor extractor = new WebvttExtractor(timestampAdjuster);
       extractorWrapper = new HlsExtractorWrapper(trigger, format, startTimeUs, extractor,
-          switchingVariantSpliced, MediaFormat.NO_VALUE, MediaFormat.NO_VALUE);
+          switchingVariant, MediaFormat.NO_VALUE, MediaFormat.NO_VALUE);
     } else if (previousTsChunk == null
         || previousTsChunk.discontinuitySequenceNumber != segment.discontinuitySequenceNumber
         || !format.equals(previousTsChunk.format)) {
@@ -557,7 +572,8 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
         // The master source has yet to instantiate an adjuster for the discontinuity sequence.
         return;
       }
-      int workaroundFlags = 0;
+      // This flag ensures the change of pid between streams does not affect the sample queues.
+      int workaroundFlags = TsExtractor.WORKAROUND_MAP_BY_TYPE;
       String codecs = format.codecs;
       if (!TextUtils.isEmpty(codecs)) {
         // Sometimes AAC and H264 streams are declared in TS chunks even though they don't really
@@ -573,12 +589,11 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
       Extractor extractor = new TsExtractor(timestampAdjuster, workaroundFlags);
       ExposedTrack selectedTrack = tracks.get(selectedTrackIndex);
       extractorWrapper = new HlsExtractorWrapper(trigger, format, startTimeUs, extractor,
-          switchingVariantSpliced, selectedTrack.adaptiveMaxWidth, selectedTrack.adaptiveMaxHeight);
+          switchingVariant, selectedTrack.adaptiveMaxWidth, selectedTrack.adaptiveMaxHeight);
     } else {
       // MPEG-2 TS segments, and we need to continue using the same extractor.
       extractorWrapper = previousTsChunk.extractorWrapper;
     }
-
     out.chunk = new TsChunk(dataSource, dataSpec, trigger, format, startTimeUs, endTimeUs,
         chunkMediaSequence, segment.discontinuitySequenceNumber, extractorWrapper, encryptionKey,
         encryptionIv);
@@ -712,8 +727,57 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
 
     return  defaultVariantIndex;
   }
-
+  
   // Private methods.
+
+  private int getLiveStartChunkSequenceNumber(int variantIndex) {
+    // For live start playback from the third chunk from the end.
+    HlsMediaPlaylist mediaPlaylist = variantPlaylists[variantIndex];
+    int chunkIndex = mediaPlaylist.segments.size() > 3 ? mediaPlaylist.segments.size() - 3 : 0;
+    return chunkIndex + mediaPlaylist.mediaSequence;
+  }
+
+  /**
+   * Returns the media sequence number of a chunk in a new variant for a live stream variant switch.
+   *
+   * @param previousChunkIndex The index of the last chunk in the old variant.
+   * @param oldVariantIndex The index of the old variant.
+   * @param newVariantIndex The index of the new variant.
+   * @return Media sequence number of the chunk to switch to in a live stream in the variant that
+   *     corresponds to the given {@code newVariantIndex}.
+   */
+  private int getLiveNextChunkSequenceNumber(int previousChunkIndex, int oldVariantIndex,
+      int newVariantIndex) {
+    if (oldVariantIndex == newVariantIndex) {
+      return previousChunkIndex + 1;
+    }
+    HlsMediaPlaylist oldMediaPlaylist = variantPlaylists[oldVariantIndex];
+    HlsMediaPlaylist newMediaPlaylist = variantPlaylists[newVariantIndex];
+    double offsetToLiveInstantSecs = 0;
+    for (int i = previousChunkIndex - oldMediaPlaylist.mediaSequence;
+         i < oldMediaPlaylist.segments.size(); i++) {
+      offsetToLiveInstantSecs += oldMediaPlaylist.segments.get(i).durationSecs;
+    }
+    long currentTimeMs = SystemClock.elapsedRealtime();
+    offsetToLiveInstantSecs +=
+        (double) (currentTimeMs - variantLastPlaylistLoadTimesMs[oldVariantIndex]) / 1000;
+    offsetToLiveInstantSecs += LIVE_VARIANT_SWITCH_SAFETY_EXTRA_SECS;
+    offsetToLiveInstantSecs -=
+        (double) (currentTimeMs - variantLastPlaylistLoadTimesMs[newVariantIndex]) / 1000;
+    if (offsetToLiveInstantSecs < 0) {
+      // The instant we are looking for is not contained in the playlist, we need it to be
+      // refreshed.
+      return newMediaPlaylist.mediaSequence + newMediaPlaylist.segments.size() + 1;
+    }
+    for (int i = newMediaPlaylist.segments.size() - 1; i >= 0; i--) {
+      offsetToLiveInstantSecs -= newMediaPlaylist.segments.get(i).durationSecs;
+      if (offsetToLiveInstantSecs < 0) {
+        return newMediaPlaylist.mediaSequence + i;
+      }
+    }
+    // We have fallen behind the live window.
+    return newMediaPlaylist.mediaSequence - 1;
+  }
 
   private int getNextVariantIndex(TsChunk previousTsChunk, long playbackPositionUs) {
     clearStaleBlacklistedVariants();
@@ -737,9 +801,8 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
     }
     // We're not using the ideal variant for the available bandwidth, but only switch if the
     // conditions are appropriate.
-    long bufferedPositionUs = adaptiveMode == ADAPTIVE_MODE_SPLICE ? previousTsChunk.startTimeUs
-        : previousTsChunk.endTimeUs;
-    long bufferedUs = bufferedPositionUs - playbackPositionUs;
+    long bufferedUs = previousTsChunk.getAdjustedEndTimeUs() - previousTsChunk.getDurationUs()
+        - playbackPositionUs;
     if (variantBlacklistTimes[selectedVariantIndex] != 0
         || (idealIndex > selectedVariantIndex && bufferedUs < maxBufferDurationToSwitchDownUs)
         || (idealIndex < selectedVariantIndex && bufferedUs > minBufferDurationToSwitchUpUs)) {
@@ -788,13 +851,7 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
     HlsMediaPlaylist mediaPlaylist = variantPlaylists[variantIndex];
     return mediaPlaylist.segments.size() > 3 ? mediaPlaylist.segments.size() - 3 : 0;
   }
-
-  private int getLiveStartChunkMediaSequence(int variantIndex) {
-    // For live start playback from the third chunk from the end.
-    int chunkIndex = getLiveEdgeIndex(variantIndex);
-    return chunkIndex + variantPlaylists[variantIndex].mediaSequence;
-  }
-
+  
   private MediaPlaylistChunk newMediaPlaylistChunk(int variantIndex) {
     Uri mediaPlaylistUri = UriUtil.resolveToUri(baseUri, variants[variantIndex].url);
     DataSpec dataSpec = new DataSpec(mediaPlaylistUri, 0, C.LENGTH_UNBOUNDED, null,
@@ -849,8 +906,8 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
   }
 
   private boolean allVariantsBlacklisted() {
-    for (int i = 0; i < variantBlacklistTimes.length; i++) {
-      if (variantBlacklistTimes[i] == 0) {
+    for (long variantBlacklistTime : variantBlacklistTimes) {
+      if (variantBlacklistTime == 0) {
         return false;
       }
     }
@@ -882,7 +939,7 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
       eventHandler.post(new Runnable() {
         @Override
         public void run() {
-          eventListener.onAvailableRangeChanged(eventSourceId, seekRange);
+          eventListener.onAvailableRangeChanged(seekRange);
         }
       });
     }

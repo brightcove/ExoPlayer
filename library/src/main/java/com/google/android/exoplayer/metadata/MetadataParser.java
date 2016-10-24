@@ -18,7 +18,7 @@ package com.google.android.exoplayer.metadata;
 import com.google.android.exoplayer.ParserException;
 
 /**
- * Parses objects of type <T> from binary data.
+ * Parses metadata from binary data.
  *
  * @param <T> The type of the metadata.
  */
@@ -33,11 +33,11 @@ public interface MetadataParser<T> {
   public boolean canParse(String mimeType);
 
   /**
-   * Parses metadata objects of type <T> from the provided binary data.
+   * Parses a metadata object from the provided binary data.
    *
    * @param data The raw binary data from which to parse the metadata.
    * @param size The size of the input data.
-   * @return @return A parsed metadata object of type <T>.
+   * @return @return A parsed metadata object.
    * @throws ParserException If a problem occurred parsing the data.
    */
   public T parse(byte[] data, int size) throws ParserException;

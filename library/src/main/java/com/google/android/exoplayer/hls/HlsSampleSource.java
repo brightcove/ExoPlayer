@@ -15,6 +15,8 @@
  */
 package com.google.android.exoplayer.hls;
 
+import android.os.Handler;
+import android.os.SystemClock;
 import com.google.android.exoplayer.C;
 import com.google.android.exoplayer.LoadControl;
 import com.google.android.exoplayer.MediaFormat;
@@ -31,10 +33,6 @@ import com.google.android.exoplayer.upstream.Loader;
 import com.google.android.exoplayer.upstream.Loader.Loadable;
 import com.google.android.exoplayer.util.Assertions;
 import com.google.android.exoplayer.util.MimeTypes;
-
-import android.os.Handler;
-import android.os.SystemClock;
-
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.LinkedList;
@@ -206,6 +204,8 @@ public final class HlsSampleSource implements SampleSource, SampleSourceReader, 
       loadControl.register(this, bufferSizeContribution);
       loadControlRegistered = true;
     }
+    // Treat enabling of a live stream as occurring at t=0 in both of the blocks below.
+    positionUs = chunkSource.isLive() ? 0 : positionUs;
     int chunkSourceTrack = chunkSourceTrackIndices[track];
     if (chunkSourceTrack != -1 && chunkSourceTrack != chunkSource.getSelectedTrackIndex()) {
       // This is a primary track whose corresponding chunk source track is different to the one
@@ -366,6 +366,8 @@ public final class HlsSampleSource implements SampleSource, SampleSourceReader, 
   public void seekToUs(long positionUs) {
     Assertions.checkState(prepared);
     Assertions.checkState(enabledTrackCount > 0);
+    // Treat all seeks into live streams as being to t=0.
+    positionUs = chunkSource.isLive() ? 0 : positionUs;
 
     // Ignore seeks to the current position.
     long currentPositionUs = isPendingReset() ? pendingResetPositionUs : downstreamPositionUs;
@@ -545,11 +547,11 @@ public final class HlsSampleSource implements SampleSource, SampleSourceReader, 
     int trackIndex = 0;
     for (int i = 0; i < extractorTrackCount; i++) {
       MediaFormat format = extractor.getMediaFormat(i).copyWithDurationUs(durationUs);
-      String language = null;
+      String muxedLanguage = null;
       if (MimeTypes.isAudio(format.mimeType)) {
-        language = chunkSource.getMuxedAudioLanguage();
+        muxedLanguage = chunkSource.getMuxedAudioLanguage();
       } else if (MimeTypes.APPLICATION_EIA608.equals(format.mimeType)) {
-        language = chunkSource.getMuxedCaptionLanguage();
+        muxedLanguage = chunkSource.getMuxedCaptionLanguage();
       }
       if (i == primaryExtractorTrackIndex) {
         for (int j = 0; j < chunkSourceTrackCount; j++) {
@@ -557,12 +559,12 @@ public final class HlsSampleSource implements SampleSource, SampleSourceReader, 
           chunkSourceTrackIndices[trackIndex] = j;
           Variant fixedTrackVariant = chunkSource.getFixedTrackVariant(j);
           trackFormats[trackIndex++] = fixedTrackVariant == null ? format.copyAsAdaptive(null)
-              : copyWithFixedTrackInfo(format, fixedTrackVariant.format, language);
+              : copyWithFixedTrackInfo(format, fixedTrackVariant.format, muxedLanguage);
         }
       } else {
         extractorTrackIndices[trackIndex] = i;
         chunkSourceTrackIndices[trackIndex] = -1;
-        trackFormats[trackIndex++] = format.copyWithLanguage(language);
+        trackFormats[trackIndex++] = format.copyWithLanguage(muxedLanguage);
       }
     }
   }
@@ -588,13 +590,14 @@ public final class HlsSampleSource implements SampleSource, SampleSourceReader, 
    *
    * @param format The {@link MediaFormat} to copy.
    * @param fixedTrackFormat The {@link Format} to incorporate into the copy.
-   * @param language The language to incorporate into the copy.
+   * @param muxedLanguage The muxed language as declared by the playlist.
    * @return The copied {@link MediaFormat}.
    */
   private static MediaFormat copyWithFixedTrackInfo(MediaFormat format, Format fixedTrackFormat,
-      String language) {
+      String muxedLanguage) {
     int width = fixedTrackFormat.width == -1 ? MediaFormat.NO_VALUE : fixedTrackFormat.width;
     int height = fixedTrackFormat.height == -1 ? MediaFormat.NO_VALUE : fixedTrackFormat.height;
+    String language = fixedTrackFormat.language == null ? muxedLanguage : fixedTrackFormat.language;
     return format.copyWithFixedTrackInfo(fixedTrackFormat.id, fixedTrackFormat.bitrate, width,
         height, language);
   }
