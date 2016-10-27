@@ -16,24 +16,31 @@ and extend, and can be updated through Play Store application updates.
 
 [developer guide]: https://google.github.io/ExoPlayer/guide.html
 [class reference]: https://google.github.io/ExoPlayer/doc/reference
-[release notes]: https://github.com/google/ExoPlayer/blob/dev-v2/RELEASENOTES.md
+[release notes]: https://github.com/brightcove/ExoPlayer/blob/master/RELEASENOTES.md
 
 ## Using ExoPlayer ##
 
-#### Via jCenter ####
+#### Via Brightcove repo ####
 
 The easiest way to get started using ExoPlayer is by including the following in
 your project's `build.gradle` file:
 
 ```gradle
-compile 'com.google.android.exoplayer:exoplayer:rX.X.X'
+repositories {
+    maven {
+      url 'http://repo.brightcove.com/releases'
+    }
+}
+```
+and
+```gradle
+compile 'com.google.exoplayer:library:X.X.X'
 ```
 
-where `rX.X.X` is the your preferred version. For the latest version, see the
-project's [Releases][]. For more details, see the project on [Bintray][].
+where `X.X.X` is your preferred version. For the latest version, see the
+project's [Releases][].
 
-[Releases]: https://github.com/google/ExoPlayer/releases
-[Bintray]: https://bintray.com/google/exoplayer/exoplayer/view
+[Releases]: https://github.com/brightcove/ExoPlayer/blob/master/RELEASES.md
 
 #### As source ####
 
@@ -61,18 +68,6 @@ If you want to use ExoPlayer as a jar, run:
 and copy `library.jar` to the libs folder of your new project.
 
 ## Developing ExoPlayer ##
-
-#### Project branches ####
-
-  * The project has `dev-vX` and `release-vX` branches, where `X` is the major
-    version number.
-  * Most development work happens on the `dev-vX` branch with the highest major
-    version number. Pull requests should normally be made to this branch.
-  * Bug fixes may be submitted to older `dev-vX` branches. When doing this, the
-    same (or an equivalent) fix should also be submitted to all subsequent
-    `dev-vX` branches.
-  * A `release-vX` branch holds the most recent stable release for major version
-    `X`.
 
 #### Using Android Studio ####
 
