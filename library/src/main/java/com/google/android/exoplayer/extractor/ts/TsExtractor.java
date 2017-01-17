@@ -41,7 +41,7 @@ public final class TsExtractor implements Extractor {
   public static final int WORKAROUND_IGNORE_AAC_STREAM = 2;
   public static final int WORKAROUND_IGNORE_H264_STREAM = 4;
   public static final int WORKAROUND_DETECT_ACCESS_UNITS = 8;
-  public static final int WORKAROUND_MAP_BY_TYPE = 16;
+  public static final int WORKAROUND_HLS_MODE = 16;
 
   private static final String TAG = "TsExtractor";
 
@@ -79,6 +79,7 @@ public final class TsExtractor implements Extractor {
 
   // Accessed only by the loading thread.
   private ExtractorOutput output;
+  private boolean tracksEnded;
   private int nextEmbeddedTrackId;
   /* package */ Id3Reader id3Reader;
 
@@ -96,10 +97,9 @@ public final class TsExtractor implements Extractor {
     tsPacketBuffer = new ParsableByteArray(BUFFER_SIZE);
     tsScratch = new ParsableBitArray(new byte[3]);
     tsPayloadReaders = new SparseArray<>();
-    tsPayloadReaders.put(TS_PAT_PID, new PatReader());
     trackIds = new SparseBooleanArray();
-    nextEmbeddedTrackId = BASE_EMBEDDED_TRACK_ID;
     continuityCounters = new SparseIntArray();
+    resetPayloadReaders();
   }
 
   // Extractor implementation.
@@ -131,11 +131,10 @@ public final class TsExtractor implements Extractor {
   @Override
   public void seek() {
     ptsTimestampAdjuster.reset();
-    for (int i = 0; i < tsPayloadReaders.size(); i++) {
-      tsPayloadReaders.valueAt(i).seek();
-    }
     tsPacketBuffer.reset();
     continuityCounters.clear();
+    // Elementary stream readers' state should be cleared to get consistent behaviours when seeking.
+    resetPayloadReaders();
   }
 
   @Override
@@ -192,16 +191,22 @@ public final class TsExtractor implements Extractor {
     tsScratch.skipBits(2); // transport_scrambling_control
     boolean adaptationFieldExists = tsScratch.readBit();
     boolean payloadExists = tsScratch.readBit();
+
+    // Discontinuity check.
     boolean discontinuityFound = false;
     int continuityCounter = tsScratch.readBits(4);
-    int previousCounter = continuityCounters.get(pid, continuityCounter - 1);
-    continuityCounters.put(pid, continuityCounter);
-    if (previousCounter == continuityCounter) {
-      // Duplicate packet found.
-      tsPacketBuffer.setPosition(endOfPacket);
-      return RESULT_CONTINUE;
-    } else if (continuityCounter != (previousCounter + 1) % 16) {
-      discontinuityFound = true;
+    if ((workaroundFlags & WORKAROUND_HLS_MODE) == 0) {
+      int previousCounter = continuityCounters.get(pid, continuityCounter - 1);
+      continuityCounters.put(pid, continuityCounter);
+      if (previousCounter == continuityCounter) {
+        if (payloadExists) {
+          // Duplicate packet found.
+          tsPacketBuffer.setPosition(endOfPacket);
+          return RESULT_CONTINUE;
+        }
+      } else if (continuityCounter != (previousCounter + 1) % 16) {
+        discontinuityFound = true;
+      }
     }
 
     // Skip the adaptation field.
@@ -229,6 +234,14 @@ public final class TsExtractor implements Extractor {
   }
 
   // Internals.
+
+  private void resetPayloadReaders() {
+    trackIds.clear();
+    tsPayloadReaders.clear();
+    tsPayloadReaders.put(TS_PAT_PID, new PatReader());
+    id3Reader = null;
+    nextEmbeddedTrackId = BASE_EMBEDDED_TRACK_ID;
+  }
 
   /**
    * Parses TS packet payload data.
@@ -323,7 +336,7 @@ public final class TsExtractor implements Extractor {
           patScratch.skipBits(13); // network_PID (13)
         } else {
           int pid = patScratch.readBits(13);
-          tsPayloadReaders.put(pid, new PmtReader());
+          tsPayloadReaders.put(pid, new PmtReader(pid));
         }
       }
 
@@ -339,14 +352,16 @@ public final class TsExtractor implements Extractor {
 
     private final ParsableBitArray pmtScratch;
     private final ParsableByteArray sectionData;
+    private final int pid;
 
     private int sectionLength;
     private int sectionBytesRead;
     private int crc;
 
-    public PmtReader() {
+    public PmtReader(int pid) {
       pmtScratch = new ParsableBitArray(new byte[5]);
       sectionData = new ParsableByteArray();
+      this.pid = pid;
     }
 
     @Override
@@ -399,7 +414,7 @@ public final class TsExtractor implements Extractor {
       // Skip the descriptors.
       sectionData.skipBytes(programInfoLength);
 
-      if ((workaroundFlags & WORKAROUND_MAP_BY_TYPE) != 0 && id3Reader == null) {
+      if ((workaroundFlags & WORKAROUND_HLS_MODE) != 0 && id3Reader == null) {
         // Setup an ID3 track regardless of whether there's a corresponding entry, in case one
         // appears intermittently during playback. See b/20261500.
         id3Reader = new Id3Reader(output.track(TS_STREAM_TYPE_ID3));
@@ -421,7 +436,7 @@ public final class TsExtractor implements Extractor {
           sectionData.skipBytes(esInfoLength);
         }
         remainingEntriesLength -= esInfoLength + 5;
-        int trackId = (workaroundFlags & WORKAROUND_MAP_BY_TYPE) != 0 ? streamType : elementaryPid;
+        int trackId = (workaroundFlags & WORKAROUND_HLS_MODE) != 0 ? streamType : elementaryPid;
         if (trackIds.get(trackId)) {
           continue;
         }
@@ -462,7 +477,7 @@ public final class TsExtractor implements Extractor {
                 new SeiReader(output.track(nextEmbeddedTrackId++)));
             break;
           case TS_STREAM_TYPE_ID3:
-            if ((workaroundFlags & WORKAROUND_MAP_BY_TYPE) != 0) {
+            if ((workaroundFlags & WORKAROUND_HLS_MODE) != 0) {
               pesPayloadReader = id3Reader;
             } else {
               pesPayloadReader = new Id3Reader(output.track(nextEmbeddedTrackId++));
@@ -479,8 +494,16 @@ public final class TsExtractor implements Extractor {
               new PesReader(pesPayloadReader, ptsTimestampAdjuster));
         }
       }
-
-      output.endTracks();
+      if ((workaroundFlags & WORKAROUND_HLS_MODE) != 0) {
+       if (!tracksEnded) {
+         output.endTracks();
+       }
+      } else {
+        tsPayloadReaders.remove(TS_PAT_PID);
+        tsPayloadReaders.remove(pid);
+        output.endTracks();
+      }
+      tracksEnded = true;
     }
 
     /**
