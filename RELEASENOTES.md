@@ -1,5 +1,23 @@
 # Release notes #
 
+### r1.5.13 ###
+
+* Improvements to the upstream cache package.
+* MP4: Support `.mp3` tracks
+  ([2066](https://github.com/google/ExoPlayer/issues/2066)).
+* SubRip: Don't fail playbacks if SubRip file contains negative timestamps
+  ([2145](https://github.com/google/ExoPlayer/issues/2145)).
+* MPEG-TS: Avoid failure when expected ID3 header not found
+  ([1966](https://github.com/google/ExoPlayer/issues/1966)).
+* Misc bugfixes.
+
+### r1.5.12 ###
+
+* Improvements to Cronet network stack extension.
+* Fix bug in demo app introduced in r1.5.11 that caused L3 Widevine
+  provisioning requests to fail.
+* Misc bugfixes.
+
 ### r1.5.11 ###
 
 * Cronet network stack extension.
