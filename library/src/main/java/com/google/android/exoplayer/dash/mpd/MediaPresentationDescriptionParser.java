@@ -232,12 +232,17 @@ public class MediaPresentationDescriptionParser extends DefaultHandler
     int audioChannels = -1;
     int audioSamplingRate = parseInt(xpp, "audioSamplingRate", -1);
     String language = xpp.getAttributeValue(null, "lang");
+    Role role = null;
 
     ContentProtectionsBuilder contentProtectionsBuilder = new ContentProtectionsBuilder();
     List<Representation> representations = new ArrayList<>();
     boolean seenFirstBaseUrl = false;
     do {
       xpp.next();
+      if (ParserUtil.isStartTag(xpp, "Role")) {
+        role = parseRoleTag(xpp);
+      }
+
       if (ParserUtil.isStartTag(xpp, "BaseURL")) {
         if (!seenFirstBaseUrl) {
           baseUrl = parseBaseUrl(xpp, baseUrl);
@@ -271,12 +276,17 @@ public class MediaPresentationDescriptionParser extends DefaultHandler
       }
     } while (!ParserUtil.isEndTag(xpp, "AdaptationSet"));
 
-    return buildAdaptationSet(id, contentType, representations, contentProtectionsBuilder.build());
+    return buildAdaptationSet(id, contentType, representations, contentProtectionsBuilder.build(), role);
   }
 
   protected AdaptationSet buildAdaptationSet(int id, int contentType,
       List<Representation> representations, List<ContentProtection> contentProtections) {
-    return new AdaptationSet(id, contentType, representations, contentProtections);
+    return buildAdaptationSet(id, contentType, representations, contentProtections, null);
+  }
+
+  protected AdaptationSet buildAdaptationSet(int id, int contentType,
+                                             List<Representation> representations, List<ContentProtection> contentProtections, Role role) {
+    return new AdaptationSet(id, contentType, representations, contentProtections, role);
   }
 
   protected int parseContentType(XmlPullParser xpp) {
@@ -354,6 +364,22 @@ public class MediaPresentationDescriptionParser extends DefaultHandler
   protected void parseAdaptationSetChild(XmlPullParser xpp)
       throws XmlPullParserException, IOException {
     // pass
+  }
+
+  //Parsing Role Tag
+  protected Role parseRoleTag(XmlPullParser xpp) throws XmlPullParserException, IOException {
+    String schemeIdUri = parseString(xpp, "schemeIdUri", null);
+    String value = parseString(xpp, "value", null);
+    Role role = null;
+
+    do {
+      xpp.next();
+    } while (!ParserUtil.isEndTag(xpp, "Role"));
+
+    if (schemeIdUri != null || value != null) {
+      role = new Role(schemeIdUri, value);
+    }
+    return role;
   }
 
   // Representation parsing.
