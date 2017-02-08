@@ -1,5 +1,6 @@
 ## Releases available on Brightcove repo
 
+- **1.5.13.1** on Feb/08/2017
 - **1.5.13** on Jan/18/2017
 - **1.5.11** on Oct/24/2016
 - **1.5.9** on Jul/28/2016
