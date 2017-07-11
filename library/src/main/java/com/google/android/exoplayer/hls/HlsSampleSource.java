@@ -366,8 +366,6 @@ public final class HlsSampleSource implements SampleSource, SampleSourceReader, 
   public void seekToUs(long positionUs) {
     Assertions.checkState(prepared);
     Assertions.checkState(enabledTrackCount > 0);
-    // Treat all seeks into live streams as being to t=0.
-    positionUs = chunkSource.isLive() ? 0 : positionUs;
 
     // Ignore seeks to the current position.
     long currentPositionUs = isPendingReset() ? pendingResetPositionUs : downstreamPositionUs;
