@@ -72,7 +72,6 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
     /**
      * Invoked when the available seek range of the stream has changed.
      *
-     * @param sourceId The id of the reporting {@link com.google.android.exoplayer.dash.DashChunkSource}.
      * @param availableRange The range which specifies available content that can be seeked to.
      */
     public void onAvailableRangeChanged(TimeRange availableRange);
@@ -107,6 +106,9 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
   private static final String VTT_FILE_EXTENSION = ".vtt";
   private static final String WEBVTT_FILE_EXTENSION = ".webvtt";
   private static final float BANDWIDTH_FRACTION = 0.8f;
+
+  // The HLS Live Window of 30 seconds.
+  private static final int HLS_LIVE_WINDOW_MS = 30000;
 
   private final boolean isMaster;
   private final DataSource dataSource;
@@ -491,9 +493,13 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
     if (chunkIndex >= mediaPlaylist.segments.size()) {
       if (!mediaPlaylist.live) {
         out.endOfStream = true;
-      } else if (shouldRerequestLiveMediaPlaylist(selectedVariantIndex)) {
+      } else if (shouldRerequestLiveMediaPlaylist(selectedVariantIndex, 0.5f)) {
         out.chunk = newMediaPlaylistChunk(selectedVariantIndex);
       }
+      return;
+    } else if (mediaPlaylist.live && shouldRerequestLiveMediaPlaylist(selectedVariantIndex, 0.5f)
+            && !isInLiveEdge(playbackPositionUs, nextVariantIndex)) {
+      out.chunk = newMediaPlaylistChunk(selectedVariantIndex);
       return;
     }
 
@@ -837,12 +843,25 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
     return lowestQualityEnabledVariantIndex;
   }
 
-  private boolean shouldRerequestLiveMediaPlaylist(int nextVariantIndex) {
+  /**
+   * Checks the last time the Playlist was loaded and verify if it is time to request
+   * an updated playlist.
+   * The time elapsed from the last time the Playlist was loaded must be equal or greater
+   * than (HLS target duration * timesTargetDuration).
+   *
+   * @param timesTargetDuration a factor number to multiply the Playlist target duration.
+   * @return true to request HLS Live Media Playlist
+   */
+  boolean shouldRerequestLiveMediaPlaylist(float timesTargetDuration) {
+    return shouldRerequestLiveMediaPlaylist(selectedVariantIndex, timesTargetDuration);
+  }
+
+  private boolean shouldRerequestLiveMediaPlaylist(int nextVariantIndex, float timesTargetDuration) {
     // Don't re-request media playlist more often than one-half of the target duration.
     HlsMediaPlaylist mediaPlaylist = variantPlaylists[nextVariantIndex];
     long timeSinceLastMediaPlaylistLoadMs =
-        SystemClock.elapsedRealtime() - variantLastPlaylistLoadTimesMs[nextVariantIndex];
-    return timeSinceLastMediaPlaylistLoadMs >= (mediaPlaylist.targetDurationSecs * 1000) / 2;
+            SystemClock.elapsedRealtime() - variantLastPlaylistLoadTimesMs[nextVariantIndex];
+    return timeSinceLastMediaPlaylistLoadMs >= (mediaPlaylist.targetDurationSecs * 1000) * timesTargetDuration;
   }
 
   private long getLiveEdgeUs(int variantIndex) {
@@ -854,6 +873,16 @@ public class HlsChunkSource implements HlsTrackSelector.Output {
   private int getLiveEdgeIndex(int variantIndex) {
     HlsMediaPlaylist mediaPlaylist = variantPlaylists[variantIndex];
     return mediaPlaylist.segments.size() > 3 ? mediaPlaylist.segments.size() - 3 : 0;
+  }
+
+  private boolean isInLiveEdge(long playbackPositionUs, int nextVariantIndex) {
+    boolean isInLiveEdge = false;
+
+    if (live) {
+      long liveEdgeUs = getLiveEdgeUs(nextVariantIndex);
+      isInLiveEdge = playbackPositionUs >= (liveEdgeUs - HLS_LIVE_WINDOW_MS);
+    }
+    return isInLiveEdge;
   }
 
   private MediaPlaylistChunk newMediaPlaylistChunk(int variantIndex) {
