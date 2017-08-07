@@ -693,6 +693,11 @@ public final class HlsSampleSource implements SampleSource, SampleSourceReader, 
     boolean nextLoader = loadControl.update(this, downstreamPositionUs, nextLoadPositionUs,
         loadingOrBackedOff);
 
+    boolean isChuckSourceLive = chunkSource == null ? false : chunkSource.isLive();
+    if (!nextLoader && isChuckSourceLive && chunkSource.shouldRerequestLiveMediaPlaylist(1f)) {
+      nextLoader = true;
+    }
+
     if (isBackedOff) {
       long elapsedMillis = now - currentLoadableExceptionTimestamp;
       if (elapsedMillis >= getRetryDelayMillis(currentLoadableExceptionCount)) {
